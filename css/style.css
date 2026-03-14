@@ -272,6 +272,8 @@ main section#home {
   display: block;
 }
 
+/* Location Suggestions Dropdown Styles - Moved to component shadow DOM */
+
 #about {
   padding-block: 40px 80px;
 }

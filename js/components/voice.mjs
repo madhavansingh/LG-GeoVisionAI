@@ -3,6 +3,7 @@ import { flytoview } from "../api/flytoview.mjs";
 import { startOrbit } from "../api/orbit.mjs";
 import { stopOrbit } from "../api/orbit.mjs";
 import { showballoon } from "../api/balloon.mjs";
+import { getLocationSuggestions, getCoordinatesFromLocation } from "../utils/geocoding.mjs";
 import ReadAloudComponent from "./read-aloud.mjs";
 customElements.define("read-aloud", ReadAloudComponent);
 
@@ -87,6 +88,47 @@ export class LGVoice extends HTMLElement {
           inline-size: 100%;
           max-inline-size: 500px;
           color: var(--md-sys-color-tertiary-container);
+          position: relative;
+        }
+
+        .suggestions-dropdown {
+          position: absolute;
+          top: 100%;
+          left: 0;
+          right: 0;
+          background-color: var(--md-sys-color-surface-container-high);
+          border: 1px solid var(--md-sys-color-outline);
+          border-radius: 8px;
+          box-shadow: var(--md-elevation-level2);
+          z-index: 10;
+          max-height: 200px;
+          overflow-y: auto;
+          display: none;
+        }
+
+        .suggestion-item {
+          padding: 12px 16px;
+          cursor: pointer;
+          color: var(--md-sys-color-on-surface);
+          border-bottom: 1px solid var(--md-sys-color-outline-variant);
+          display: flex;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .suggestion-item md-icon {
+          flex-shrink: 0;
+          font-size: 18px;
+          color: var(--md-sys-color-on-surface-variant);
+        }
+
+        .suggestion-item:hover,
+        .suggestion-item.selected {
+          background-color: var(--md-sys-color-surface-container-highest);
+        }
+
+        .suggestion-item:last-child {
+          border-bottom: none;
         }
 
         .manual-input md-filled-text-field {
@@ -221,6 +263,7 @@ export class LGVoice extends HTMLElement {
             placeholder="E.g.-- What is the capital of the USA?"
             value="">
           </md-filled-text-field>
+          <div class="suggestions-dropdown" id="suggestionsDropdown"></div>
           <md-filled-button id="submitButton">Ask AI</md-filled-button>
 
           <div class="orbit-buttons">
@@ -276,7 +319,70 @@ export class LGVoice extends HTMLElement {
       if (typed !== "") {
         this.processQuery(typed);
         questionInput.value = "";
+        this.hideSuggestions();
         speech.stop(); // Stop any ongoing narration when a new query is submitted
+      }
+    });
+
+    // Debounced input listener for location suggestions
+    let debounceTimer;
+    questionInput.addEventListener("input", () => {
+      clearTimeout(debounceTimer);
+      const query = questionInput.value.trim();
+      if (query.length < 3) {
+        this.hideSuggestions();
+        return;
+      }
+      debounceTimer = setTimeout(async () => {
+        const suggestions = await getLocationSuggestions(query);
+        this.showSuggestions(suggestions);
+      }, 300);
+    });
+
+    // Handle keyboard navigation and Enter key
+    questionInput.addEventListener("keydown", (e) => {
+      const dropdown = this.shadowRoot.getElementById("suggestionsDropdown");
+      const isDropdownVisible = dropdown.style.display === "block";
+      
+      if (isDropdownVisible) {
+        const items = this.shadowRoot.querySelectorAll(".suggestion-item");
+        
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          this.selectedIndex = (this.selectedIndex + 1) % items.length;
+          this.updateSelection();
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          this.selectedIndex = this.selectedIndex <= 0 ? items.length - 1 : this.selectedIndex - 1;
+          this.updateSelection();
+        } else if (e.key === "Enter" && this.selectedIndex >= 0) {
+          e.preventDefault();
+          const selectedItem = items[this.selectedIndex];
+          if (selectedItem) {
+            const textSpan = selectedItem.querySelector("span");
+            questionInput.value = textSpan ? textSpan.textContent : selectedItem.textContent;
+            this.hideSuggestions();
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          this.hideSuggestions();
+        }
+      } else if (e.key === "Enter") {
+        // Normal submit behavior when dropdown is not visible
+        const typed = questionInput.value.trim();
+        if (typed !== "") {
+          this.processQuery(typed);
+          questionInput.value = "";
+          this.hideSuggestions();
+          speech.stop();
+        }
+      }
+    });
+
+    // Hide suggestions when clicking outside
+    document.addEventListener("click", (e) => {
+      if (!this.shadowRoot.contains(e.target)) {
+        this.hideSuggestions();
       }
     });
 
@@ -285,6 +391,9 @@ export class LGVoice extends HTMLElement {
 
     // Stores the last coordinates after each Gemini location extraction
     this.lastCoordinates = null;
+
+    // Stores the currently selected suggestion index
+    this.selectedIndex = -1;
 
     startOrbitButton.addEventListener("click", async () => {
       if (!this.lastCoordinates) {
@@ -381,36 +490,6 @@ export class LGVoice extends HTMLElement {
     }
   }
 
-  // Fetches coordinates from OpenCage API based on the provided location query
-  async getCoordinatesFromLocation(locationQuery, openCageApiKey) {
-    if (!locationQuery || locationQuery.trim() === "") {
-        return null;
-    }
-
-    const encodedQuery = encodeURIComponent(locationQuery);
-    const OPENCAGE_API_ENDPOINT = `https://api.opencagedata.com/geocode/v1/json?q=${encodedQuery}&key=${openCageApiKey}&pretty=0&no_annotations=1`;
-
-    try {
-        const response = await fetch(OPENCAGE_API_ENDPOINT);
-        if (!response.ok) {
-            const errorBody = await response.json();
-            throw new Error(`OpenCage API failed: ${response.status} - ${errorBody.status?.message || JSON.stringify(errorBody)}`);
-        }
-
-        const data = await response.json();
-
-        if (data.results && data.results.length > 0) {
-            const firstResult = data.results[0].geometry;
-            return { lat: firstResult.lat, lng: firstResult.lng };
-        } else {
-            return null;
-        }
-    } catch (error) {
-        console.error("Error calling OpenCage API:", error);
-        return null;
-    }
-  }
-  
   //Hnadling queries like take me to, show me, send me to, fly to...along with general queries for Gemini
   async processQuery(query) {
     const storyEl = this.shadowRoot.getElementById("story");
@@ -449,7 +528,7 @@ export class LGVoice extends HTMLElement {
       this.showToast(`Detected direct location fly to command: "${identifiedLocation}"`);
 
       console.log("Fetching coordinates for:", identifiedLocation);
-      const coordinates = await this.getCoordinatesFromLocation(identifiedLocation, openCageApiKey);
+      const coordinates = await getCoordinatesFromLocation(identifiedLocation, openCageApiKey);
       console.log("Coordinates fetched:", coordinates);
 
       if (!coordinates || isNaN(coordinates.lat) || isNaN(coordinates.lng)) {
@@ -590,7 +669,7 @@ export class LGVoice extends HTMLElement {
       if (fixedLocations[key]) {
         coordinates = fixedLocations[key];
       } else {
-        coordinates = await this.getCoordinatesFromLocation(identifiedLocation, openCageApiKey);
+        coordinates = await getCoordinatesFromLocation(identifiedLocation, openCageApiKey);
       }
   
       if (coordinates) {
@@ -623,6 +702,68 @@ export class LGVoice extends HTMLElement {
     const paragraph = storyReader.querySelector('[slot="paragraph"]');
     paragraph.textContent = geminiResponse || geminiTextResponse || "";
 
+  }
+
+  // Show location suggestions dropdown
+  showSuggestions(suggestions) {
+    const dropdown = this.shadowRoot.getElementById("suggestionsDropdown");
+    dropdown.innerHTML = "";
+    
+    if (suggestions.length === 0) {
+      this.hideSuggestions();
+      return;
+    }
+
+    this.selectedIndex = 0; // Start with first suggestion selected
+
+    suggestions.forEach((suggestion, index) => {
+      const item = document.createElement("div");
+      item.className = "suggestion-item";
+      if (index === this.selectedIndex) {
+        item.classList.add("selected");
+      }
+      
+      // Add location icon
+      const icon = document.createElement("md-icon");
+      icon.textContent = "location_on";
+      
+      // Add suggestion text
+      const textSpan = document.createElement("span");
+      textSpan.textContent = suggestion.formatted;
+      
+      item.appendChild(icon);
+      item.appendChild(textSpan);
+      
+      item.addEventListener("click", () => {
+        const questionInput = this.shadowRoot.getElementById("questionInput");
+        questionInput.value = suggestion.formatted;
+        this.hideSuggestions();
+        questionInput.focus();
+      });
+      dropdown.appendChild(item);
+    });
+
+    dropdown.style.display = "block";
+  }
+
+  // Hide location suggestions dropdown
+  hideSuggestions() {
+    const dropdown = this.shadowRoot.getElementById("suggestionsDropdown");
+    dropdown.style.display = "none";
+    dropdown.innerHTML = "";
+    this.selectedIndex = -1;
+  }
+
+  // Update the visual selection in the dropdown
+  updateSelection() {
+    const items = this.shadowRoot.querySelectorAll(".suggestion-item");
+    items.forEach((item, index) => {
+      if (index === this.selectedIndex) {
+        item.classList.add("selected");
+      } else {
+        item.classList.remove("selected");
+      }
+    });
   }
 
   //function for generating image dynamically
