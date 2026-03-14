@@ -131,6 +131,41 @@ export class LGVoice extends HTMLElement {
           border-bottom: none;
         }
 
+        .recent-searches {
+          margin-block-start: 8px;
+          display: none;
+        }
+
+        .recent-title {
+          font-size: 0.875rem;
+          font-weight: 500;
+          color: var(--md-sys-color-on-surface-variant);
+          margin: 0 0 8px 0;
+          text-align: center;
+        }
+
+        .recent-list {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .recent-item {
+          padding: 8px 12px;
+          background-color: var(--md-sys-color-surface-container-low);
+          border-radius: 6px;
+          cursor: pointer;
+          color: var(--md-sys-color-on-surface);
+          font-size: 0.875rem;
+          transition: background-color 0.15s ease;
+          border: 1px solid transparent;
+        }
+
+        .recent-item:hover {
+          background-color: var(--md-sys-color-surface-container);
+          border-color: var(--md-sys-color-outline-variant);
+        }
+
         .manual-input md-filled-text-field {
             flex-grow: 1;
         }
@@ -264,6 +299,10 @@ export class LGVoice extends HTMLElement {
             value="">
           </md-filled-text-field>
           <div class="suggestions-dropdown" id="suggestionsDropdown"></div>
+          <div class="recent-searches" id="recentSearches">
+            <p class="recent-title">Recent Searches</p>
+            <div class="recent-list" id="recentList"></div>
+          </div>
           <md-filled-button id="submitButton">Ask AI</md-filled-button>
 
           <div class="orbit-buttons">
@@ -317,6 +356,7 @@ export class LGVoice extends HTMLElement {
     submitButton.addEventListener("click", () => {
       const typed = questionInput.value.trim();
       if (typed !== "") {
+        this.saveQueryToHistory(typed);
         this.processQuery(typed);
         questionInput.value = "";
         this.hideSuggestions();
@@ -371,6 +411,7 @@ export class LGVoice extends HTMLElement {
         // Normal submit behavior when dropdown is not visible
         const typed = questionInput.value.trim();
         if (typed !== "") {
+          this.saveQueryToHistory(typed);
           this.processQuery(typed);
           questionInput.value = "";
           this.hideSuggestions();
@@ -385,6 +426,9 @@ export class LGVoice extends HTMLElement {
         this.hideSuggestions();
       }
     });
+
+    // Initialize recent searches
+    this.renderRecentSearches();
 
     const startOrbitButton = this.shadowRoot.getElementById("startOrbitButton");
     const stopOrbitButton = this.shadowRoot.getElementById("stopOrbitButton");
@@ -450,6 +494,7 @@ export class LGVoice extends HTMLElement {
 
     recognition.onresult = (event) => {
       const transcript = event.results[0][0].transcript.trim();
+      this.saveQueryToHistory(transcript);
       this.processQuery(transcript);
       isRecognizing = false;
       this.removeAnimations();
@@ -766,6 +811,72 @@ export class LGVoice extends HTMLElement {
     });
   }
 
+  // Save query to history
+  saveQueryToHistory(query) {
+    if (!query || query.trim() === "") return;
+    
+    const trimmedQuery = query.trim().toLowerCase();
+    let history = this.loadQueryHistory();
+    
+    // Convert existing history to lowercase for comparison
+    const lowerHistory = history.map(q => q.toLowerCase());
+    
+    // Find and remove existing duplicate (case-insensitive)
+    const duplicateIndex = lowerHistory.indexOf(trimmedQuery);
+    if (duplicateIndex !== -1) {
+      history.splice(duplicateIndex, 1);
+    }
+    
+    // Add the original query (preserving original casing) to the beginning
+    history.unshift(query.trim());
+    
+    // Keep only last 5
+    history = history.slice(0, 5);
+    
+    localStorage.setItem("queryHistory", JSON.stringify(history));
+    this.renderRecentSearches();
+  }
+
+  // Load query history from localStorage
+  loadQueryHistory() {
+    try {
+      const history = localStorage.getItem("queryHistory");
+      return history ? JSON.parse(history) : [];
+    } catch (error) {
+      console.error("Error loading query history:", error);
+      return [];
+    }
+  }
+
+  // Render recent searches list
+  renderRecentSearches() {
+    const history = this.loadQueryHistory();
+    const recentSearches = this.shadowRoot.getElementById("recentSearches");
+    const recentList = this.shadowRoot.getElementById("recentList");
+    
+    recentList.innerHTML = "";
+    
+    if (history.length === 0) {
+      recentSearches.style.display = "none";
+      return;
+    }
+    
+    history.forEach(query => {
+      const item = document.createElement("div");
+      item.className = "recent-item";
+      item.textContent = query;
+      item.addEventListener("click", () => {
+        const questionInput = this.shadowRoot.getElementById("questionInput");
+        questionInput.value = query;
+        this.processQuery(query);
+        this.hideSuggestions();
+      });
+      recentList.appendChild(item);
+    });
+    
+    recentSearches.style.display = "block";
+  }
+
   //function for generating image dynamically
   async generateImageUrlFromText(text, locationHint = "") {
     const baseUrl = "https://raw.githubusercontent.com/Anishka2006/lg-geovisionai/main/";
@@ -1011,5 +1122,6 @@ customElements.define("lg-voice", LGVoice);
 export async function exportprocessQueryExternally(query) {
   const lgVoiceInstance = document.querySelector("lg-voice");
   if (!lgVoiceInstance) throw new Error("lg-voice not found");
+  lgVoiceInstance.saveQueryToHistory(query);
   return lgVoiceInstance.processQuery(query);
 }
