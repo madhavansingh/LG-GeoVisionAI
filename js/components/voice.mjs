@@ -14,6 +14,7 @@ export class LGVoice extends HTMLElement {
     const template = document.createElement("template");
     template.innerHTML = `
       <style>
+      <style>
         .wrapper {
           position: relative;
           display: flex;
@@ -78,6 +79,24 @@ export class LGVoice extends HTMLElement {
           padding-right: 5px;
           padding-block-start: 5px;
           padding-block-end: 5px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+        }
+
+        .loading-spinner {
+          display: inline-block;
+          width: 20px;
+          height: 20px;
+          border: 2px solid var(--md-sys-color-outline-variant);
+          border-radius: 50%;
+          border-top-color: var(--md-sys-color-primary);
+          animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
         }
 
         .manual-input {
@@ -281,7 +300,10 @@ export class LGVoice extends HTMLElement {
         <p class="headline-small">Tap on the Mic to Speak!</p>
         
 
-        <p class="body-medium message"></p>
+        <p class="body-medium message">
+          <span class="loading-spinner" id="loadingSpinner" style="display: none;"></span>
+          <span class="message-text" id="messageText"></span>
+        </p>
     
         <div class="readAloudWrapper">
           <read-aloud id="storyReader">
@@ -315,6 +337,9 @@ export class LGVoice extends HTMLElement {
       </div>
     `;
     this.shadowRoot.appendChild(template.content.cloneNode(true));
+    
+    // Initialize loading state
+    this.isLoading = false;
   }
 
   connectedCallback() {
@@ -355,7 +380,7 @@ export class LGVoice extends HTMLElement {
 
     submitButton.addEventListener("click", () => {
       const typed = questionInput.value.trim();
-      if (typed !== "") {
+      if (typed !== "" && !this.isLoading) {
         this.saveQueryToHistory(typed);
         this.processQuery(typed);
         questionInput.value = "";
@@ -410,7 +435,7 @@ export class LGVoice extends HTMLElement {
       } else if (e.key === "Enter") {
         // Normal submit behavior when dropdown is not visible
         const typed = questionInput.value.trim();
-        if (typed !== "") {
+        if (typed !== "" && !this.isLoading) {
           this.saveQueryToHistory(typed);
           this.processQuery(typed);
           questionInput.value = "";
@@ -525,13 +550,25 @@ export class LGVoice extends HTMLElement {
     }, 1200);
   }
 
-  showToast(message) {
+  showToast(message, isLoading = false) {
     const toast = this.shadowRoot.querySelector(".message");
-    toast.textContent = message;
-    if (message) {
-      toast.style.display = 'block';
+    const spinner = this.shadowRoot.getElementById("loadingSpinner");
+    const messageText = this.shadowRoot.getElementById("messageText");
+    
+    this.isLoading = isLoading;
+    
+    if (isLoading) {
+      spinner.style.display = 'inline-block';
+      messageText.textContent = message || "AI is thinking...";
+      toast.style.display = 'flex';
     } else {
-      toast.style.display = 'none';
+      spinner.style.display = 'none';
+      messageText.textContent = message;
+      if (message) {
+        toast.style.display = 'flex';
+      } else {
+        toast.style.display = 'none';
+      }
     }
   }
 
@@ -540,7 +577,7 @@ export class LGVoice extends HTMLElement {
     const storyEl = this.shadowRoot.getElementById("story");
     const soundPlayer = this.shadowRoot.getElementById("soundPlayer");
   
-    this.showToast("Processing your question...");
+    this.showToast("AI is thinking...", true);
     soundPlayer.hidden = true;
     storyEl.textContent = "";
     let imageUrl = ""; //for dynamically changing image on the balloon
@@ -557,7 +594,7 @@ export class LGVoice extends HTMLElement {
     const freesoundApiKey = localStorage.getItem("freesoundApiKey");
   
     if (!googleGeminiApiKey || !openCageApiKey || !freesoundApiKey) {
-      this.showToast("Please enter and save all API keys in the Settings tab to proceed.");
+      this.showToast("Please enter and save all API keys in the Settings tab to proceed.", false);
       this.removeAnimations();
       return;
     }
@@ -577,7 +614,7 @@ export class LGVoice extends HTMLElement {
       console.log("Coordinates fetched:", coordinates);
 
       if (!coordinates || isNaN(coordinates.lat) || isNaN(coordinates.lng)) {
-        this.showToast(`Could not find valid coordinates for "${identifiedLocation}".`);
+        this.showToast(`Could not find valid coordinates for "${identifiedLocation}".`, false);
         this.removeAnimations();
         return;
       }
@@ -614,7 +651,7 @@ export class LGVoice extends HTMLElement {
 
       setTimeout(() => {
         speech.speak(geminiResponse, () => {
-          this.showToast("Story narration finished.");
+          this.showToast("Story narration finished.", false);
         });
       }, 800);
 
@@ -643,7 +680,7 @@ export class LGVoice extends HTMLElement {
         const geminiAnswerData = await geminiAnswerRes.json();
         geminiTextResponse = geminiAnswerData.candidates?.[0]?.content?.parts?.[0]?.text || "No response from Google Gemini.";
         if (!geminiTextResponse || geminiTextResponse.trim() === "") {
-          this.showToast("Gemini returned an empty response.");
+          this.showToast("Gemini returned an empty response.", false);
           this.removeAnimations();
           return;
         }
@@ -652,7 +689,7 @@ export class LGVoice extends HTMLElement {
         this.showToast("Narrating story...");
         setTimeout(() => {
           speech.speak(geminiTextResponse, () => {
-            this.showToast("Story narration finished.");
+            this.showToast("Story narration finished.", false);
           });
         }, 150);
         
@@ -684,13 +721,13 @@ export class LGVoice extends HTMLElement {
         identifiedLocation = geminiLocationData.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "N/A";
   
         if (!identifiedLocation || identifiedLocation.toLowerCase() === "n/a") {
-          this.showToast("No valid location extracted from Gemini.");
+          this.showToast("No valid location extracted from Gemini.", false);
           this.removeAnimations();
           return;
         }
       } catch (error) {
         console.error("Gemini API error:", error);
-        this.showToast(`Gemini error: ${error.message}`);
+        this.showToast(`Gemini error: ${error.message}`, false);
         this.removeAnimations();
         return;
       }
@@ -740,6 +777,7 @@ export class LGVoice extends HTMLElement {
       this.showToast(`Error processing location: ${error.message}`);
     } finally {
       this.removeAnimations();
+      this.showToast("", false); // Hide loading state
     }
 
     //  AI Narration of the generated story
@@ -866,10 +904,12 @@ export class LGVoice extends HTMLElement {
       item.className = "recent-item";
       item.textContent = query;
       item.addEventListener("click", () => {
-        const questionInput = this.shadowRoot.getElementById("questionInput");
-        questionInput.value = query;
-        this.processQuery(query);
-        this.hideSuggestions();
+        if (!this.isLoading) {
+          const questionInput = this.shadowRoot.getElementById("questionInput");
+          questionInput.value = query;
+          this.processQuery(query);
+          this.hideSuggestions();
+        }
       });
       recentList.appendChild(item);
     });
